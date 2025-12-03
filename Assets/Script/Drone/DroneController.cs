@@ -15,22 +15,21 @@ public class DroneController : MonoBehaviour
 
     private bool isMoving = false;
 
-    // for, if 등을 위한 변수 저장 공간
-    private Dictionary<string, int> variables = new Dictionary<string, int>();
-
 
     void Start()
     {
-
         currentGridPos = Vector2Int.RoundToInt(transform.position);
         targetWorldPos = transform.position;
+
         StartCoroutine(ProcessCommands());
     }
+
 
     public void AddCommand(Command cmd)
     {
         commandQueue.Enqueue(cmd);
     }
+
 
     private IEnumerator ProcessCommands()
     {
@@ -42,6 +41,7 @@ public class DroneController : MonoBehaviour
                 yield return null;
                 continue;
             }
+
             if (commandQueue.Count > 0 && !isMoving)
             {
                 Command cmd = commandQueue.Dequeue();
@@ -49,74 +49,62 @@ public class DroneController : MonoBehaviour
                 switch (cmd.type)
                 {
                     case CommandType.Move:
-                        {
-                            Vector2Int dir = (Vector2Int)cmd.data;
-                            MoveCommand(dir);
-                            yield return new WaitUntil(() => !isMoving);
-                        }
+                        MoveCommand((Vector2Int)cmd.data);
+                        yield return new WaitUntil(() => !isMoving);
                         break;
 
                     case CommandType.Wait:
-                        {
-                            int t = (int)cmd.data;
-                            yield return new WaitForSeconds(t);
-                        }
+                        yield return new WaitForSeconds((int)cmd.data);
                         break;
 
                     case CommandType.If:
-                        {
-                            var ifData = (IfData)cmd.data;
-                            if (EvaluateCondition(ifData.condition))
-                                yield return StartCoroutine(RunBlock(ifData.block));
-                        }
+                        var ifData = (IfData)cmd.data;
+                        if (EvaluateCondition(ifData.condition))
+                            yield return StartCoroutine(RunBlock(ifData.block));
                         break;
 
                     case CommandType.While:
-                        {
-                            var w = (WhileData)cmd.data;
-                            while (EvaluateCondition(w.condition))
-                                yield return StartCoroutine(RunBlock(w.block));
-                        }
+                        var w = (WhileData)cmd.data;
+                        while (EvaluateCondition(w.condition))
+                            yield return StartCoroutine(RunBlock(w.block));
                         break;
 
                     case CommandType.For:
+                        var f = (ForData)cmd.data;
+                        ExecuteInit(f.init);
+                        while (EvaluateCondition(f.condition))
                         {
-                            var f = (ForData)cmd.data;
-
-                            ExecuteInit(f.init);
-
-                            while (EvaluateCondition(f.condition))
-                            {
-                                yield return StartCoroutine(RunBlock(f.block));
-                                ExecuteIncrement(f.increment);
-                            }
+                            yield return StartCoroutine(RunBlock(f.block));
+                            ExecuteIncrement(f.increment);
                         }
                         break;
 
                     case CommandType.VariableAssign:
-                        {
-                            var v = (VariableAssignData)cmd.data;
-                            variables[v.VarName] = GetValue(v.Value);
-                        }
+                        var v = (VariableAssignData)cmd.data;
+                        ScriptEnvironment.numbers[v.VarName] = GetValue(v.Value);
                         break;
+
                     case CommandType.FunctionCall:
-                        {
-                            var call = (FunctionCallData)cmd.data;
-                            yield return StartCoroutine(RunFunction(call));
-                        }
+                        yield return StartCoroutine(RunFunction((FunctionCallData)cmd.data));
                         break;
                 }
             }
+
             yield return null;
         }
     }
 
-    // ▼ 블록 실행 함수
+
+
+    // -----------------------------
+    // 블록 실행
+    // -----------------------------
     private IEnumerator RunBlock(List<Command> block)
     {
         foreach (var cmd in block)
         {
             if (CodeStop) yield break;
+
             switch (cmd.type)
             {
                 case CommandType.Move:
@@ -137,10 +125,7 @@ public class DroneController : MonoBehaviour
                 case CommandType.While:
                     var w = (WhileData)cmd.data;
                     while (EvaluateCondition(w.condition))
-                    {
-                        if (CodeStop) yield break;
                         yield return StartCoroutine(RunBlock(w.block));
-                    }
                     break;
 
                 case CommandType.For:
@@ -148,103 +133,106 @@ public class DroneController : MonoBehaviour
                     ExecuteInit(f.init);
                     while (EvaluateCondition(f.condition))
                     {
-                        if (CodeStop) yield break;
                         yield return StartCoroutine(RunBlock(f.block));
                         ExecuteIncrement(f.increment);
                     }
                     break;
+
                 case CommandType.VariableAssign:
-                    var v = (VariableAssignData)cmd.data;
-                    variables[v.VarName] = GetValue(v.Value);
+                    var va = (VariableAssignData)cmd.data;
+                    ScriptEnvironment.numbers[va.VarName] = GetValue(va.Value);
+                    break;
+
+                case CommandType.FunctionCall:
+                    yield return StartCoroutine(RunFunction((FunctionCallData)cmd.data));
                     break;
             }
         }
     }
+
+
+
+    // -----------------------------
+    // 함수 실행
+    // -----------------------------
     private IEnumerator RunFunction(FunctionCallData call)
     {
-        FunctionData f = ScriptEnvironment.functions[call.name];
+        // 함수 정보 가져오기
+        var f = ScriptEnvironment.functions[call.name];
 
-        // 파라미터 매핑
-        string[] argValues = string.IsNullOrEmpty(call.args) ?
-                             new string[0] :
-                             call.args.Split(',');
+        // 파라미터 적용
+        string[] argValues = string.IsNullOrEmpty(call.args)
+            ? new string[0]
+            : call.args.Split(',');
 
         for (int i = 0; i < f.parameters.Count; i++)
         {
-            string paramDef = f.parameters[i];   // "int a"
-            string[] parts = paramDef.Split(' ');
-            string type = parts[0];
-            string name = parts[1];
+            string[] parts = f.parameters[i].Split(' ');
+            string paramName = parts[1];
 
-            ScriptEnvironment.numbers[name] = float.Parse(argValues[i]);
+            ScriptEnvironment.numbers[paramName] = GetValue(argValues[i].Trim());
         }
 
         // 함수 본문 실행
-        foreach (var cmd in f.body)
-        {
-            AddCommand(cmd);
-        }
-
-        yield return null;
+        yield return StartCoroutine(RunBlock(f.body));
     }
 
+    // -----------------------------
+    // 스크립트 제어
+    // -----------------------------
     public void StartScript()
     {
         CodeStop = false;
-
         isMoving = false;
 
-        // 현재 위치 고정
-        transform.position = new Vector2(currentGridPos.x, currentGridPos.y);
+        // ★★★ 이게 문제 해결 핵심 ★★★
+        currentGridPos = Vector2Int.RoundToInt(transform.position);
+
         targetWorldPos = transform.position;
 
-        // 큐 초기화
         commandQueue.Clear();
+
+        // ★ 실행할 때마다 항상 코루틴 재시작 ★
+        StopAllCoroutines();
+        StartCoroutine(ProcessCommands());
     }
+
     public void StopScript()
     {
         CodeStop = true;
 
-        // 코루틴 완전 종료 후 재시작
         StopAllCoroutines();
         StartCoroutine(ProcessCommands());
 
-        // 이동 멈춤
         isMoving = false;
 
-        // 위치 고정
-        transform.position = new Vector2(currentGridPos.x, currentGridPos.y);
-        targetWorldPos = transform.position;
+        // ★★★ 이것도 넣어야 한다 ★★★
+        currentGridPos = Vector2Int.RoundToInt(transform.position);
 
-        // 명령 초기화
+        transform.position = targetWorldPos = transform.position;
+
         commandQueue.Clear();
-
-        // 변수 초기화
         ScriptEnvironment.ClearVariables();
     }
 
-    // bool E
-    // ▼ 조건 평가
+
+
+    // -----------------------------
+    // 조건/값 계산
+    // -----------------------------
     private bool EvaluateCondition(string cond)
     {
         cond = cond.Replace(" ", "");
 
-        // 1) true / false
         if (cond == "true") return true;
         if (cond == "false") return false;
 
-        // 2) 단일 변수일 경우 처리
         if (!cond.Contains(">") && !cond.Contains("<") &&
             !cond.Contains("==") && !cond.Contains("!="))
         {
-            float v = GetValue(cond);
-
-            // float이 0이 아니면 true, 0이면 false 로 처리
-            // 또는 bool 타입이 따로 있다면 bool로 캐스팅
-            return Mathf.Abs(v) > 0.0001f;
+            return Mathf.Abs(GetValue(cond)) > 0.0001f;
         }
 
-        // 3) 비교 연산자 탐색
         string op = "";
 
         if (cond.Contains(">=")) op = ">=";
@@ -253,59 +241,54 @@ public class DroneController : MonoBehaviour
         else if (cond.Contains("!=")) op = "!=";
         else if (cond.Contains(">")) op = ">";
         else if (cond.Contains("<")) op = "<";
-        else
-            throw new Exception("조건식 연산자 오류: " + cond);
 
-        // 4) 비교식 파싱
-        string[] parts = cond.Split(new string[] { op }, StringSplitOptions.None);
+        string[] p = cond.Split(new string[] { op }, StringSplitOptions.None);
+        float left = GetValue(p[0]);
+        float right = GetValue(p[1]);
 
-        string left = parts[0];
-        string right = parts[1];
-
-        float leftVal = GetValue(left);
-        float rightVal = GetValue(right);
-
-        switch (op)
+        return op switch
         {
-            case ">": return leftVal > rightVal;
-            case "<": return leftVal < rightVal;
-            case ">=": return leftVal >= rightVal;
-            case "<=": return leftVal <= rightVal;
-            case "==": return Mathf.Approximately(leftVal, rightVal);
-            case "!=": return !Mathf.Approximately(leftVal, rightVal);
-        }
-
-        return false;
+            ">" => left > right,
+            "<" => left < right,
+            ">=" => left >= right,
+            "<=" => left <= right,
+            "==" => Mathf.Approximately(left, right),
+            "!=" => !Mathf.Approximately(left, right),
+            _ => false
+        };
     }
 
-    private int GetValue(string token)
+    private float GetValue(string token)
     {
+        token = token.Trim();
+
         if (token == "true") return 1;
         if (token == "false") return 0;
 
-        if (int.TryParse(token, out int f))
+        if (float.TryParse(token, out float f))
             return f;
 
-        if (variables.ContainsKey(token))
-            return variables[token];
+        if (ScriptEnvironment.numbers.ContainsKey(token))
+            return ScriptEnvironment.numbers[token];
 
-        // 변수가 없으면 기본 생성
-        variables[token] = 0;
+        ScriptEnvironment.numbers[token] = 0;
         return 0;
     }
 
-    // ▼ for문의 초기화
+
+
+    // -----------------------------
+    // for 구문
+    // -----------------------------
     private void ExecuteInit(string init)
     {
-        // i = 0
         string[] parts = init.Split('=');
         string var = parts[0].Trim();
         string value = parts[1].Trim();
 
-        variables[var] = GetValue(value);
+        ScriptEnvironment.numbers[var] = GetValue(value);
     }
 
-    // ▼ for문의 증가식
     private void ExecuteIncrement(string inc)
     {
         inc = inc.Trim();
@@ -313,39 +296,44 @@ public class DroneController : MonoBehaviour
         if (inc.EndsWith("++"))
         {
             string var = inc.Replace("++", "");
-            variables[var]++;
-            return;
-        }
-        if (inc.EndsWith("--"))
-        {
-            string var = inc.Replace("--", "");
-            variables[var]--;
+            ScriptEnvironment.numbers[var]++;
             return;
         }
 
-        // i += 2
+        if (inc.EndsWith("--"))
+        {
+            string var = inc.Replace("--", "");
+            ScriptEnvironment.numbers[var]--;
+            return;
+        }
+
         if (inc.Contains("+="))
         {
             string[] p = inc.Split("+=");
-            variables[p[0].Trim()] += GetValue(p[1].Trim());
+            ScriptEnvironment.numbers[p[0].Trim()] += GetValue(p[1].Trim());
             return;
         }
 
         if (inc.Contains("-="))
         {
             string[] p = inc.Split("-=");
-            variables[p[0].Trim()] -= GetValue(p[1].Trim());
+            ScriptEnvironment.numbers[p[0].Trim()] -= GetValue(p[1].Trim());
             return;
         }
     }
 
+
+
+    // -----------------------------
+    // 이동 처리
+    // -----------------------------
     void Update()
     {
         if (isMoving)
             MoveTowardsTarget();
     }
 
-    void MoveTowardsTarget()
+    private void MoveTowardsTarget()
     {
         transform.position = Vector2.MoveTowards(transform.position, targetWorldPos, moveSpeed * Time.deltaTime);
         if (Vector2.Distance(transform.position, targetWorldPos) < 0.01f)
